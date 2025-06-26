@@ -710,7 +710,7 @@ const App = () => {
           {!gameState.gameStarted && !gameState.gameOver && (
             <div className="game-overlay">
               <div className="overlay-content">
-                <h2>Welcome to Frog House!</h2>
+                <h2>Welcome to PUMP House!</h2>
                 <p>Use ← → or A/D keys to move</p>
                 <p className="instructions">Jump on lily pads to go higher!</p>
                 {isUsernameSet ? (
