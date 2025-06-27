@@ -4,6 +4,8 @@ const App = () => {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const keysRef = useRef({ left: false, right: false });
+  const tiltRef = useRef({ gamma: 0, isActive: false });
+  const [showLore, setShowLore] = useState(false);
   
   // Game constants
   const CANVAS_WIDTH = 800;
@@ -15,7 +17,14 @@ const App = () => {
   const PLATFORM_HEIGHT = 20;
   const PLATFORM_SPACING = 150;
 
-  // API endpoint - change this to your server's URL
+  // Mobile detection and tilt settings
+  const [isMobile, setIsMobile] = useState(false);
+  const [tiltEnabled, setTiltEnabled] = useState(false);
+  const [showMobileControls, setShowMobileControls] = useState(false);
+  const TILT_SENSITIVITY = 15; // degrees
+  const TILT_DEADZONE = 3; // degrees
+
+  // API endpoint
   const API_BASE_URL = 'http://localhost:3001/api';
 
   // Character selection
@@ -57,6 +66,101 @@ const App = () => {
     zeek: null
   });
 
+  // Mobile detection
+  useEffect(() => {
+    const checkMobile = () => {
+      const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+      const mobileCheck = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent);
+      const touchCheck = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+      return mobileCheck || touchCheck;
+    };
+
+    setIsMobile(checkMobile());
+    setShowMobileControls(checkMobile());
+  }, []);
+
+  // Request motion permissions for iOS
+  const requestMotionPermission = async () => {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const permission = await DeviceMotionEvent.requestPermission();
+        return permission === 'granted';
+      } catch (error) {
+        console.warn('Motion permission denied:', error);
+        return false;
+      }
+    }
+    return true; // Android or older iOS
+  };
+
+  // Enable tilt controls
+  const enableTiltControls = async () => {
+    const hasPermission = await requestMotionPermission();
+    if (!hasPermission) {
+      alert('Motion permission is required for tilt controls. Please enable it in your browser settings.');
+      return;
+    }
+
+    setTiltEnabled(true);
+    tiltRef.current.isActive = true;
+  };
+
+  // Disable tilt controls
+  const disableTiltControls = () => {
+    setTiltEnabled(false);
+    tiltRef.current.isActive = false;
+    keysRef.current.left = false;
+    keysRef.current.right = false;
+  };
+
+  // Device orientation handler
+  useEffect(() => {
+    const handleOrientation = (event) => {
+      if (!tiltRef.current.isActive) return;
+
+      const gamma = event.gamma || 0; // Left-right tilt (-90 to 90)
+      tiltRef.current.gamma = gamma;
+
+      // Apply deadzone
+      if (Math.abs(gamma) < TILT_DEADZONE) {
+        keysRef.current.left = false;
+        keysRef.current.right = false;
+        return;
+      }
+
+      // Map tilt to movement
+      if (gamma < -TILT_DEADZONE) {
+        keysRef.current.left = true;
+        keysRef.current.right = false;
+      } else if (gamma > TILT_DEADZONE) {
+        keysRef.current.right = true;
+        keysRef.current.left = false;
+      }
+    };
+
+    if (isMobile && tiltEnabled) {
+      window.addEventListener('deviceorientation', handleOrientation);
+      return () => window.removeEventListener('deviceorientation', handleOrientation);
+    }
+  }, [isMobile, tiltEnabled]);
+
+  // Touch controls for mobile
+  const [touchControls, setTouchControls] = useState({ left: false, right: false });
+
+  const handleTouchStart = (direction) => {
+    if (!tiltEnabled) {
+      setTouchControls(prev => ({ ...prev, [direction]: true }));
+      keysRef.current[direction] = true;
+    }
+  };
+
+  const handleTouchEnd = (direction) => {
+    if (!tiltEnabled) {
+      setTouchControls(prev => ({ ...prev, [direction]: false }));
+      keysRef.current[direction] = false;
+    }
+  };
+
   // Load player images
   useEffect(() => {
     const loadImage = (src, key) => {
@@ -92,7 +196,6 @@ const App = () => {
   // Initialize platforms
   const generatePlatforms = useCallback(() => {
     const platforms = [];
-    // Starting platform
     platforms.push({
       x: CANVAS_WIDTH / 2 - PLATFORM_WIDTH / 2,
       y: CANVAS_HEIGHT - 50,
@@ -100,7 +203,6 @@ const App = () => {
       height: PLATFORM_HEIGHT
     });
 
-    // Generate initial platforms going upward
     for (let i = 1; i < 100; i++) {
       platforms.push({
         x: Math.random() * (CANVAS_WIDTH - PLATFORM_WIDTH),
@@ -117,7 +219,6 @@ const App = () => {
     const newPlatforms = [];
     const startY = currentHighest - PLATFORM_SPACING;
     
-    // Generate 20 more platforms above the current highest
     for (let i = 1; i <= 20; i++) {
       newPlatforms.push({
         x: Math.random() * (CANVAS_WIDTH - PLATFORM_WIDTH),
@@ -141,7 +242,6 @@ const App = () => {
       }
     } catch (error) {
       console.error('Error loading global leaderboard:', error);
-      // Fallback to localStorage if server is not available
       const savedGlobalLeaderboard = localStorage.getItem('frogHouseGlobalLeaderboard');
       if (savedGlobalLeaderboard) {
         const userScores = JSON.parse(savedGlobalLeaderboard);
@@ -169,7 +269,6 @@ const App = () => {
 
   // Load saved username and leaderboards
   useEffect(() => {
-    // Load saved username
     const savedUsername = localStorage.getItem('frogHouseUsername');
     if (savedUsername) {
       setUsername(savedUsername);
@@ -177,13 +276,11 @@ const App = () => {
       loadUserPersonalBest(savedUsername);
     }
 
-    // Load local leaderboard
     const savedLeaderboard = localStorage.getItem('frogHouseLeaderboard');
     if (savedLeaderboard) {
       setLocalLeaderboard(JSON.parse(savedLeaderboard));
     }
 
-    // Load global leaderboard
     loadGlobalLeaderboard();
   }, []);
 
@@ -240,14 +337,12 @@ const App = () => {
         const data = await response.json();
         if (data.success) {
           console.log('Score saved to global leaderboard!');
-          // Reload the global leaderboard and user's personal best
           await loadGlobalLeaderboard();
           await loadUserPersonalBest(username);
         }
       }
     } catch (error) {
       console.error('Error saving global score:', error);
-      // Fallback to localStorage if server is not available
       const savedGlobalLeaderboard = localStorage.getItem('frogHouseGlobalLeaderboard');
       const userScores = savedGlobalLeaderboard ? JSON.parse(savedGlobalLeaderboard) : [];
       
@@ -279,12 +374,12 @@ const App = () => {
         case 'ArrowLeft':
         case 'a':
         case 'A':
-          keysRef.current.left = true;
+          if (!tiltEnabled) keysRef.current.left = true;
           break;
         case 'ArrowRight':
         case 'd':
         case 'D':
-          keysRef.current.right = true;
+          if (!tiltEnabled) keysRef.current.right = true;
           break;
         case ' ':
           e.preventDefault();
@@ -310,12 +405,12 @@ const App = () => {
         case 'ArrowLeft':
         case 'a':
         case 'A':
-          keysRef.current.left = false;
+          if (!tiltEnabled) keysRef.current.left = false;
           break;
         case 'ArrowRight':
         case 'd':
         case 'D':
-          keysRef.current.right = false;
+          if (!tiltEnabled) keysRef.current.right = false;
           break;
       }
     };
@@ -327,7 +422,7 @@ const App = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [gameState.gameStarted, showUsernameInput]);
+  }, [gameState.gameStarted, showUsernameInput, tiltEnabled]);
 
   const startGame = () => {
     const platforms = generatePlatforms();
@@ -554,26 +649,55 @@ const App = () => {
       }
 
       ctx.fillStyle = '#fff';
-      ctx.font = '24px Arial';
-      ctx.fillText(`Score: ${gameState.score}`, 20, 40);
+      ctx.font = isMobile ? '18px Arial' : '24px Arial';
+      ctx.fillText(`Score: ${gameState.score}`, 15, isMobile ? 30 : 40);
       
       if (userPersonalBest) {
-        ctx.font = '18px Arial';
+        ctx.font = isMobile ? '14px Arial' : '18px Arial';
         ctx.fillStyle = '#ffd700';
-        ctx.fillText(`PB: ${userPersonalBest}`, 20, 70);
+        ctx.fillText(`PB: ${userPersonalBest}`, 15, isMobile ? 50 : 70);
       }
       
       if (globalLeaderboard.length > 0) {
-        ctx.font = '16px Arial';
+        ctx.font = isMobile ? '12px Arial' : '16px Arial';
         ctx.fillStyle = '#ff6b35';
-        ctx.fillText(`World: ${globalLeaderboard[0].score}`, 20, 95);
+        ctx.fillText(`World: ${globalLeaderboard[0].score}`, 15, isMobile ? 70 : 95);
+      }
+
+      // Tilt indicator for mobile
+      if (isMobile && tiltEnabled) {
+        const tiltAngle = tiltRef.current.gamma;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.font = '12px Arial';
+        ctx.fillText(`Tilt: ${Math.round(tiltAngle)}°`, CANVAS_WIDTH - 80, 25);
       }
     }
   });
 
+  // Mobile-specific styles
+  const mobileStyles = {
+    modal: {
+      padding: isMobile ? '1rem' : '2rem',
+      maxWidth: isMobile ? '95vw' : '500px',
+      maxHeight: isMobile ? '90vh' : 'none',
+      overflow: isMobile ? 'auto' : 'visible'
+    },
+    header: {
+      padding: isMobile ? '0.5rem 0' : '1rem 0',
+      fontSize: isMobile ? '1.2rem' : '2rem'
+    },
+    button: {
+      padding: isMobile ? '0.5rem 0.75rem' : '0.75rem 1rem',
+      fontSize: isMobile ? '0.8rem' : '0.9rem'
+    }
+  };
+
   return (
     <div style={{ 
-      minHeight: '100vh', 
+      minHeight: '100vh',
+      width: '100%',
+      margin: 0,
+      padding: 0,
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       fontFamily: 'Arial, sans-serif'
     }}>
@@ -581,58 +705,99 @@ const App = () => {
       <header style={{
         background: 'rgba(0, 0, 0, 0.8)',
         color: 'white',
-        padding: '1rem 0',
+        padding: mobileStyles.header.padding,
         boxShadow: '0 2px 10px rgba(0,0,0,0.3)'
       }}>
         <div style={{
           maxWidth: '1200px',
           margin: '0 auto',
-          padding: '0 2rem',
+          padding: isMobile ? '0 1rem' : '0 2rem',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          flexWrap: 'wrap'
+          flexWrap: 'wrap',
+          gap: isMobile ? '0.5rem' : '1rem'
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '2rem' }}>🐸 PUMP HOUSE 🐸 (Cooper NGMI)</h1>
-            <p style={{ margin: '0.5rem 0 0 0', opacity: 0.8 }}>A PUMP Jump Adventure</p>
+            <h1 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : '2rem' }}>
+              🐸 PUMP HOUSE 🐸 {!isMobile && '(Cooper NGMI)'}
+            </h1>
+            <p style={{ margin: '0.25rem 0 0 0', opacity: 0.8, fontSize: isMobile ? '0.8rem' : '1rem' }}>
+              A PUMP Jump Adventure
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ 
+            display: 'flex', 
+            gap: isMobile ? '0.5rem' : '1rem', 
+            alignItems: 'center', 
+            flexWrap: 'wrap',
+            fontSize: isMobile ? '0.8rem' : '1rem'
+          }}>
             <button 
               onClick={() => setShowCharacterSelect(true)}
               style={{
                 background: '#ff6b35',
                 color: 'white',
                 border: 'none',
-                padding: '0.75rem 1rem',
+                ...mobileStyles.button,
                 borderRadius: '25px',
                 cursor: 'pointer',
-                fontSize: '0.9rem',
                 fontWeight: 'bold',
                 transition: 'all 0.3s ease'
               }}
             >
-              🎭 Character: {selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek'}
+              🎭 {isMobile ? selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek' : `Character: ${selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek'}`}
             </button>
+            {isMobile && (
+              <button 
+                onClick={() => setShowMobileControls(!showMobileControls)}
+                style={{
+                  background: '#2196f3',
+                  color: 'white',
+                  border: 'none',
+                  ...mobileStyles.button,
+                  borderRadius: '25px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                📱 Controls
+              </button>
+            )}
             <button 
               onClick={() => setShowGlobalLeaderboard(true)}
               style={{
                 background: '#4caf50',
                 color: 'white',
                 border: 'none',
-                padding: '0.75rem 1rem',
+                ...mobileStyles.button,
                 borderRadius: '25px',
                 cursor: 'pointer',
-                fontSize: '0.9rem',
                 fontWeight: 'bold',
                 transition: 'all 0.3s ease'
               }}
             >
-              🏆 Global Leaderboard
+              🏆 {isMobile ? 'Leaderboard' : 'Global Leaderboard'}
+            </button>
+            <button 
+              onClick={() => setShowLore(true)}
+              style={{
+                background: '#9e9e9e',
+                color: 'white',
+                border: 'none',
+                ...mobileStyles.button,
+                borderRadius: '25px',
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                transition: 'all 0.3s ease'
+              }}
+            >
+              📖 {isMobile ? 'Lore' : 'The Lore'}
             </button>
             {isUsernameSet ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span>👤 {username}</span>
+                <span style={{ fontSize: isMobile ? '0.8rem' : '1rem' }}>👤 {username}</span>
                 <button 
                   onClick={() => setShowUsernameInput(true)} 
                   style={{
@@ -640,10 +805,10 @@ const App = () => {
                     color: 'white',
                     border: '1px solid white',
                     borderRadius: '50%',
-                    width: '30px',
-                    height: '30px',
+                    width: isMobile ? '25px' : '30px',
+                    height: isMobile ? '25px' : '30px',
                     cursor: 'pointer',
-                    fontSize: '0.8rem'
+                    fontSize: isMobile ? '0.7rem' : '0.8rem'
                   }}
                   title="Change username"
                 >
@@ -657,19 +822,89 @@ const App = () => {
                   background: '#9c27b0',
                   color: 'white',
                   border: 'none',
-                  padding: '0.75rem 1rem',
+                  ...mobileStyles.button,
                   borderRadius: '25px',
                   cursor: 'pointer',
-                  fontSize: '0.9rem',
                   fontWeight: 'bold'
                 }}
               >
-                Set Username
+                {isMobile ? 'Username' : 'Set Username'}
               </button>
             )}
           </div>
         </div>
       </header>
+
+      {/* Mobile Controls Panel */}
+      {isMobile && showMobileControls && (
+        <div style={{
+          background: 'rgba(0, 0, 0, 0.9)',
+          color: 'white',
+          padding: '1rem',
+          textAlign: 'center',
+          position: 'relative'
+        }}>
+          <button
+            onClick={() => setShowMobileControls(false)}
+            style={{
+              position: 'absolute',
+              top: '0.5rem',
+              right: '0.5rem',
+              background: 'none',
+              border: 'none',
+              color: 'white',
+              fontSize: '1.2rem',
+              cursor: 'pointer'
+            }}
+          >
+            ✕
+          </button>
+          <h3 style={{ margin: '0 0 1rem 0' }}>📱 Mobile Controls</h3>
+          {!tiltEnabled ? (
+            <div>
+              <p style={{ margin: '0 0 1rem 0', fontSize: '0.9rem' }}>
+                Enable tilt controls to move by tilting your phone left and right!
+              </p>
+              <button
+                onClick={enableTiltControls}
+                style={{
+                  background: '#4caf50',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '25px',
+                  cursor: 'pointer',
+                  fontSize: '1rem',
+                  fontWeight: 'bold',
+                  marginBottom: '1rem'
+                }}
+              >
+                📱 Enable Tilt Controls
+              </button>
+            </div>
+          ) : (
+            <div>
+              <p style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', color: '#4caf50' }}>
+                ✅ Tilt controls enabled! Tilt your phone to move left and right.
+              </p>
+              <button
+                onClick={disableTiltControls}
+                style={{
+                  background: '#ff6b35',
+                  color: 'white',
+                  border: 'none',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '20px',
+                  cursor: 'pointer',
+                  fontSize: '0.9rem'
+                }}
+              >
+                Disable Tilt Controls
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Character Selection Modal */}
       {showCharacterSelect && (
@@ -683,23 +918,22 @@ const App = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          padding: isMobile ? '1rem' : '0'
         }} onClick={() => setShowCharacterSelect(false)}>
           <div style={{
             background: 'white',
             borderRadius: '20px',
-            padding: '2rem',
-            maxWidth: '500px',
-            width: '90%',
+            ...mobileStyles.modal,
             boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              marginBottom: '2rem'
+              marginBottom: isMobile ? '1rem' : '2rem'
             }}>
-              <h2 style={{ margin: 0, color: '#333' }}>🎭 Choose Your Character</h2>
+              <h2 style={{ margin: 0, color: '#333', fontSize: isMobile ? '1.2rem' : '1.5rem' }}>🎭 Choose Your Character</h2>
               <button 
                 onClick={() => setShowCharacterSelect(false)}
                 style={{
@@ -718,14 +952,14 @@ const App = () => {
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
               gap: '1rem',
-              marginBottom: '2rem'
+              marginBottom: isMobile ? '1rem' : '2rem'
             }}>
               <div 
                 onClick={() => handleCharacterSelect('cooper')}
                 style={{
                   border: selectedCharacter === 'cooper' ? '3px solid #4caf50' : '2px solid #ddd',
                   borderRadius: '15px',
-                  padding: '1rem',
+                  padding: isMobile ? '0.75rem' : '1rem',
                   textAlign: 'center',
                   cursor: 'pointer',
                   background: selectedCharacter === 'cooper' ? '#f0f8f0' : '#f9f9f9',
@@ -733,26 +967,26 @@ const App = () => {
                 }}
               >
                 <div style={{
-                  width: '80px',
-                  height: '80px',
+                  width: isMobile ? '60px' : '80px',
+                  height: isMobile ? '60px' : '80px',
                   background: '#e0e0e0',
                   borderRadius: '10px',
                   margin: '0 auto 1rem',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '2rem'
+                  fontSize: isMobile ? '1.5rem' : '2rem'
                 }}>
                   {playerImages.cooper ? (
                     <img 
                       src="/cooper.png" 
                       alt="Cooper" 
-                      style={{ width: '60px', height: '60px', objectFit: 'contain' }}
+                      style={{ width: isMobile ? '40px' : '60px', height: isMobile ? '40px' : '60px', objectFit: 'contain' }}
                     />
                   ) : '🐸'}
                 </div>
-                <h3 style={{ margin: '0 0 0.5rem 0', color: '#333' }}>Cooper</h3>
-                <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Confirmed Scammer</p>
+                <h3 style={{ margin: '0 0 0.5rem 0', color: '#333', fontSize: isMobile ? '1rem' : '1.2rem' }}>Cooper</h3>
+                <p style={{ margin: 0, fontSize: isMobile ? '0.8rem' : '0.9rem', color: '#666' }}>Confirmed Scammer</p>
               </div>
               
               <div 
@@ -760,7 +994,7 @@ const App = () => {
                 style={{
                   border: selectedCharacter === 'zeek' ? '3px solid #4caf50' : '2px solid #ddd',
                   borderRadius: '15px',
-                  padding: '1rem',
+                  padding: isMobile ? '0.75rem' : '1rem',
                   textAlign: 'center',
                   cursor: 'pointer',
                   background: selectedCharacter === 'zeek' ? '#f0f8f0' : '#f9f9f9',
@@ -768,26 +1002,26 @@ const App = () => {
                 }}
               >
                 <div style={{
-                  width: '80px',
-                  height: '80px',
+                  width: isMobile ? '60px' : '80px',
+                  height: isMobile ? '60px' : '80px',
                   background: '#e0e0e0',
                   borderRadius: '10px',
                   margin: '0 auto 1rem',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '2rem'
+                  fontSize: isMobile ? '1.5rem' : '2rem'
                 }}>
                   {playerImages.zeek ? (
                     <img 
                       src="/zeek.png" 
                       alt="Zeek" 
-                      style={{ width: '60px', height: '60px', objectFit: 'contain' }}
+                      style={{ width: isMobile ? '40px' : '60px', height: isMobile ? '40px' : '60px', objectFit: 'contain' }}
                     />
                   ) : '👹'}
                 </div>
-                <h3 style={{ margin: '0 0 0.5rem 0', color: '#333' }}>Zeek</h3>
-                <p style={{ margin: 0, fontSize: '0.9rem', color: '#666' }}>Hero of the Trenches</p>
+                <h3 style={{ margin: '0 0 0.5rem 0', color: '#333', fontSize: isMobile ? '1rem' : '1.2rem' }}>Zeek</h3>
+                <p style={{ margin: 0, fontSize: isMobile ? '0.8rem' : '0.9rem', color: '#666' }}>Hero of the Trenches</p>
               </div>
             </div>
           </div>
@@ -806,13 +1040,14 @@ const App = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          padding: isMobile ? '1rem' : '0'
         }} onClick={() => setShowUsernameInput(false)}>
           <div style={{
             background: 'white',
             borderRadius: '20px',
-            padding: '2rem',
-            maxWidth: '400px',
+            padding: isMobile ? '1.5rem' : '2rem',
+            maxWidth: isMobile ? '95vw' : '400px',
             width: '90%',
             boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
           }} onClick={(e) => e.stopPropagation()}>
@@ -822,7 +1057,9 @@ const App = () => {
               alignItems: 'center',
               marginBottom: '1rem'
             }}>
-              <h2 style={{ margin: 0, color: '#333' }}>👤 {isUsernameSet ? 'Change Username' : 'Set Username'}</h2>
+              <h2 style={{ margin: 0, color: '#333', fontSize: isMobile ? '1.2rem' : '1.5rem' }}>
+                👤 {isUsernameSet ? 'Change Username' : 'Set Username'}
+              </h2>
               <button 
                 onClick={() => setShowUsernameInput(false)}
                 style={{
@@ -837,7 +1074,9 @@ const App = () => {
               </button>
             </div>
             <div>
-              <p style={{ color: '#666', marginBottom: '1rem' }}>Choose a username to compete on the global leaderboard!</p>
+              <p style={{ color: '#666', marginBottom: '1rem', fontSize: isMobile ? '0.9rem' : '1rem' }}>
+                Choose a username to compete on the global leaderboard!
+              </p>
               <input
                 type="text"
                 value={tempUsername}
@@ -849,11 +1088,11 @@ const App = () => {
                   padding: '0.75rem',
                   border: '2px solid #ddd',
                   borderRadius: '10px',
-                  fontSize: '1rem',
+                  fontSize: isMobile ? '16px' : '1rem', // 16px prevents zoom on iOS
                   marginBottom: '1rem',
                   boxSizing: 'border-box'
                 }}
-                autoFocus
+                autoFocus={!isMobile} // Avoid auto-focus on mobile to prevent keyboard issues
               />
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button 
@@ -867,11 +1106,11 @@ const App = () => {
                     padding: '0.75rem',
                     borderRadius: '10px',
                     cursor: tempUsername.trim().length >= 2 ? 'pointer' : 'not-allowed',
-                    fontSize: '1rem',
+                    fontSize: isMobile ? '0.9rem' : '1rem',
                     fontWeight: 'bold'
                   }}
                 >
-                  {isUsernameSet ? 'Update Username' : 'Set Username'}
+                  {isUsernameSet ? 'Update' : 'Set Username'}
                 </button>
                 <button 
                   onClick={() => setShowUsernameInput(false)}
@@ -883,7 +1122,7 @@ const App = () => {
                     padding: '0.75rem',
                     borderRadius: '10px',
                     cursor: 'pointer',
-                    fontSize: '1rem'
+                    fontSize: isMobile ? '0.9rem' : '1rem'
                   }}
                 >
                   Cancel
@@ -906,13 +1145,14 @@ const App = () => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          padding: isMobile ? '1rem' : '0'
         }} onClick={() => setShowGlobalLeaderboard(false)}>
           <div style={{
             background: 'white',
             borderRadius: '20px',
-            padding: '2rem',
-            maxWidth: '600px',
+            padding: isMobile ? '1rem' : '2rem',
+            maxWidth: isMobile ? '95vw' : '600px',
             width: '90%',
             maxHeight: '80vh',
             overflow: 'auto',
@@ -922,9 +1162,11 @@ const App = () => {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              marginBottom: '2rem'
+              marginBottom: isMobile ? '1rem' : '2rem'
             }}>
-              <h2 style={{ margin: 0, color: '#333' }}>🌍 Global Leaderboard 🌍</h2>
+              <h2 style={{ margin: 0, color: '#333', fontSize: isMobile ? '1.2rem' : '1.5rem' }}>
+                🌍 Global Leaderboard 🌍
+              </h2>
               <button 
                 onClick={() => setShowGlobalLeaderboard(false)}
                 style={{
@@ -967,18 +1209,19 @@ const App = () => {
               <>
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '50px 1fr 100px 80px',
-                  gap: '1rem',
+                  gridTemplateColumns: isMobile ? '40px 1fr 80px' : '50px 1fr 100px 80px',
+                  gap: isMobile ? '0.5rem' : '1rem',
                   padding: '0.75rem',
                   background: '#f5f5f5',
                   borderRadius: '10px',
                   marginBottom: '1rem',
                   fontWeight: 'bold',
-                  color: '#333'
+                  color: '#333',
+                  fontSize: isMobile ? '0.8rem' : '1rem'
                 }}>
                   <span>Rank</span>
                   <span>Username</span>
-                  <span>Character</span>
+                  {!isMobile && <span>Character</span>}
                   <span>Score</span>
                 </div>
                 
@@ -988,23 +1231,31 @@ const App = () => {
                       key={entry.id || index} 
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '50px 1fr 100px 80px',
-                        gap: '1rem',
+                        gridTemplateColumns: isMobile ? '40px 1fr 80px' : '50px 1fr 100px 80px',
+                        gap: isMobile ? '0.5rem' : '1rem',
                         padding: '0.75rem',
                         borderRadius: '10px',
                         marginBottom: '0.5rem',
                         background: isUsernameSet && entry.username === username ? '#e8f5e8' : '#f9f9f9',
                         border: isUsernameSet && entry.username === username ? '2px solid #4caf50' : '1px solid #eee',
-                        alignItems: 'center'
+                        alignItems: 'center',
+                        fontSize: isMobile ? '0.8rem' : '1rem'
                       }}
                     >
                       <span style={{ fontWeight: 'bold', color: '#666' }}>#{index + 1}</span>
-                      <span style={{ fontWeight: isUsernameSet && entry.username === username ? 'bold' : 'normal' }}>
+                      <span style={{ 
+                        fontWeight: isUsernameSet && entry.username === username ? 'bold' : 'normal',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
                         {entry.username}
                       </span>
-                      <span style={{ fontSize: '0.9rem', color: '#666', textTransform: 'capitalize' }}>
-                        {entry.character || 'cooper'}
-                      </span>
+                      {!isMobile && (
+                        <span style={{ fontSize: '0.9rem', color: '#666', textTransform: 'capitalize' }}>
+                          {entry.character || 'cooper'}
+                        </span>
+                      )}
                       <span style={{ fontWeight: 'bold', color: '#4caf50' }}>{entry.score}</span>
                     </div>
                   ))}
@@ -1020,7 +1271,9 @@ const App = () => {
                 borderRadius: '10px',
                 textAlign: 'center'
               }}>
-                <p style={{ margin: '0 0 1rem 0', color: '#856404' }}>👤 Set a username to submit your scores to the global leaderboard!</p>
+                <p style={{ margin: '0 0 1rem 0', color: '#856404', fontSize: isMobile ? '0.9rem' : '1rem' }}>
+                  👤 Set a username to submit your scores to the global leaderboard!
+                </p>
                 <button 
                   onClick={() => {
                     setShowGlobalLeaderboard(false);
@@ -1033,7 +1286,7 @@ const App = () => {
                     padding: '0.75rem 1.5rem',
                     borderRadius: '25px',
                     cursor: 'pointer',
-                    fontSize: '1rem',
+                    fontSize: isMobile ? '0.9rem' : '1rem',
                     fontWeight: 'bold'
                   }}
                 >
@@ -1044,31 +1297,165 @@ const App = () => {
           </div>
         </div>
       )}
+      {showLore && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.85)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: isMobile ? '1rem' : '2rem'
+        }} onClick={() => setShowLore(false)}>
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '20px',
+              maxWidth: isMobile ? '95vw' : '600px',
+              width: '90%',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              padding: isMobile ? '1rem' : '2rem',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+              textAlign: 'left',
+              lineHeight: '1.6'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : '1.5rem' }}>📖 The Lore</h2>
+              <button 
+                onClick={() => setShowLore(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  cursor: 'pointer',
+                  color: '#666'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <p><strong>How Cooper Shaw Scammed Zeek the Trench Hero</strong></p>
+            <p>
+              In the depths of the PUMP House, Zeek the Trench Hero labored tirelessly, slaying scams and minting frogs to preserve the sanctity of the chain. 
+              But lurking in the shadows was Cooper Shaw — a silver-tongued schemer with a plan.
+            </p>
+            <p>
+              Under the guise of a partnership, Cooper promised Zeek eternal clout and matching royalties. Zeek, trusting as ever, agreed — not realizing he was 
+              signing away his trench-earned treasure.
+            </p>
+            <p>
+              When the moment came, Cooper ghosted. He rerouted the mint, sniped the royalties, and claimed the memes as his own. Zeek’s cries echoed through 
+              the swamp. But instead of vengeance, Zeek took to the lily pads — training, ascending, preparing for the day he'd leap higher than ever before.
+            </p>
+            <p>
+              The Trench remembers. 🐸
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Game Container */}
       <main style={{
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        minHeight: 'calc(100vh - 200px)',
-        padding: '2rem'
+        minHeight: isMobile ? 'calc(100vh - 120px)' : 'calc(100vh - 200px)',
+        padding: isMobile ? '0.5rem' : '2rem'
       }}>
         <div style={{
           position: 'relative',
           maxWidth: '800px',
           width: '100%',
+          height: isMobile ? 'calc(100vh - 140px)' : 'auto',
+          maxHeight: isMobile ? 'calc(100vh - 140px)' : 'none',
           background: 'rgba(255, 255, 255, 0.1)',
           borderRadius: '20px',
           overflow: 'hidden',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
+          boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
+          display: 'flex',
+          flexDirection: 'column'
         }}>
           <canvas
             ref={canvasRef}
             width={CANVAS_WIDTH}
             height={CANVAS_HEIGHT}
-            style={{ width: '100%', maxWidth: '800px', height: 'auto', display: 'block' }}
+            style={{ 
+              width: '100%', 
+              height: isMobile ? '100%' : 'auto',
+              maxWidth: '800px', 
+              maxHeight: isMobile ? 'calc(100vh - 140px)' : 'none',
+              display: 'block',
+              touchAction: 'manipulation' // Prevent pinch-to-zoom
+            }}
             tabIndex="0"
           />
+          
+          {/* Touch Controls for Mobile (when tilt is disabled) */}
+          {isMobile && !tiltEnabled && gameState.gameStarted && !gameState.gameOver && (
+            <div style={{
+              position: 'absolute',
+              bottom: '20px',
+              left: '20px',
+              right: '20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              pointerEvents: 'none'
+            }}>
+              <button
+                onTouchStart={() => handleTouchStart('left')}
+                onTouchEnd={() => handleTouchEnd('left')}
+                onMouseDown={() => handleTouchStart('left')}
+                onMouseUp={() => handleTouchEnd('left')}
+                onMouseLeave={() => handleTouchEnd('left')}
+                style={{
+                  background: touchControls.left ? 'rgba(76, 175, 80, 0.8)' : 'rgba(255, 255, 255, 0.3)',
+                  border: '2px solid white',
+                  borderRadius: '50%',
+                  width: '60px',
+                  height: '60px',
+                  color: 'white',
+                  fontSize: '1.5rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  pointerEvents: 'auto',
+                  userSelect: 'none',
+                  touchAction: 'manipulation'
+                }}
+              >
+                ←
+              </button>
+              <button
+                onTouchStart={() => handleTouchStart('right')}
+                onTouchEnd={() => handleTouchEnd('right')}
+                onMouseDown={() => handleTouchStart('right')}
+                onMouseUp={() => handleTouchEnd('right')}
+                onMouseLeave={() => handleTouchEnd('right')}
+                style={{
+                  background: touchControls.right ? 'rgba(76, 175, 80, 0.8)' : 'rgba(255, 255, 255, 0.3)',
+                  border: '2px solid white',
+                  borderRadius: '50%',
+                  width: '60px',
+                  height: '60px',
+                  color: 'white',
+                  fontSize: '1.5rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  pointerEvents: 'auto',
+                  userSelect: 'none',
+                  touchAction: 'manipulation'
+                }}
+              >
+                →
+              </button>
+            </div>
+          )}
           
           {/* Game UI Overlays */}
           {!gameState.gameStarted && !gameState.gameOver && (
@@ -1083,21 +1470,41 @@ const App = () => {
               alignItems: 'center',
               justifyContent: 'center',
               color: 'white',
-              textAlign: 'center'
+              textAlign: 'center',
+              padding: isMobile ? '1rem' : '2rem'
             }}>
               <div>
-                <h2 style={{ margin: '0 0 1rem 0', fontSize: '2rem' }}>Welcome to PUMP House!</h2>
-                <p style={{ margin: '0.5rem 0', fontSize: '1.1rem' }}>Use ← → or A/D keys to move</p>
-                <p style={{ margin: '0.5rem 0 2rem 0', fontSize: '1rem', opacity: 0.8 }}>Jump on lily pads to go higher!</p>
+                <h2 style={{ margin: '0 0 1rem 0', fontSize: isMobile ? '1.5rem' : '2rem' }}>
+                  Welcome to PUMP House!
+                </h2>
+                <p style={{ margin: '0.5rem 0', fontSize: isMobile ? '1rem' : '1.1rem' }}>
+                  {isMobile ? 'Tilt phone or use buttons to move' : 'Use ← → or A/D keys to move'}
+                </p>
+                <p style={{ margin: '0.5rem 0 2rem 0', fontSize: isMobile ? '0.9rem' : '1rem', opacity: 0.8 }}>
+                  Jump on lily pads to go higher!
+                </p>
                 
                 <div style={{ marginBottom: '2rem' }}>
-                  <p style={{ margin: '0.5rem 0', fontSize: '1rem' }}>
+                  <p style={{ margin: '0.5rem 0', fontSize: isMobile ? '0.9rem' : '1rem' }}>
                     Playing as: <strong>{selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek'}</strong>
                   </p>
                   {isUsernameSet ? (
-                    <p style={{ margin: '0.5rem 0', color: '#4caf50' }}>👤 Username: <strong>{username}</strong></p>
+                    <p style={{ margin: '0.5rem 0', color: '#4caf50', fontSize: isMobile ? '0.9rem' : '1rem' }}>
+                      👤 Username: <strong>{username}</strong>
+                    </p>
                   ) : (
-                    <p style={{ margin: '0.5rem 0', color: '#ffd700' }}>Set a username to compete globally!</p>
+                    <p style={{ margin: '0.5rem 0', color: '#ffd700', fontSize: isMobile ? '0.9rem' : '1rem' }}>
+                      Set a username to compete globally!
+                    </p>
+                  )}
+                  
+                  {isMobile && (
+                    <p style={{ margin: '1rem 0', color: '#ff6b35', fontSize: '0.9rem' }}>
+                      {tiltEnabled ? 
+                        '📱 Tilt controls enabled!' : 
+                        '📱 Enable tilt controls in the mobile panel above'
+                      }
+                    </p>
                   )}
                 </div>
                 
@@ -1107,15 +1514,16 @@ const App = () => {
                     background: '#4caf50',
                     color: 'white',
                     border: 'none',
-                    padding: '1rem 2rem',
+                    padding: isMobile ? '0.75rem 1.5rem' : '1rem 2rem',
                     borderRadius: '25px',
                     cursor: 'pointer',
-                    fontSize: '1.2rem',
+                    fontSize: isMobile ? '1rem' : '1.2rem',
                     fontWeight: 'bold',
-                    boxShadow: '0 4px 15px rgba(76, 175, 80, 0.3)'
+                    boxShadow: '0 4px 15px rgba(76, 175, 80, 0.3)',
+                    touchAction: 'manipulation'
                   }}
                 >
-                  Press SPACE or Click to Start
+                  {isMobile ? 'Tap to Start' : 'Press SPACE or Click to Start'}
                 </button>
               </div>
             </div>
@@ -1133,28 +1541,31 @@ const App = () => {
               alignItems: 'center',
               justifyContent: 'center',
               color: 'white',
-              textAlign: 'center'
+              textAlign: 'center',
+              padding: isMobile ? '1rem' : '2rem'
             }}>
-              <div style={{ maxWidth: '400px', width: '90%' }}>
-                <h2 style={{ margin: '0 0 1rem 0', fontSize: '2rem' }}>Game Over!</h2>
-                <p style={{ margin: '0 0 2rem 0', fontSize: '1.5rem', color: '#ffd700' }}>Final Score: {gameState.score}</p>
+              <div style={{ maxWidth: isMobile ? '100%' : '400px', width: '90%' }}>
+                <h2 style={{ margin: '0 0 1rem 0', fontSize: isMobile ? '1.5rem' : '2rem' }}>Game Over!</h2>
+                <p style={{ margin: '0 0 2rem 0', fontSize: isMobile ? '1.2rem' : '1.5rem', color: '#ffd700' }}>
+                  Final Score: {gameState.score}
+                </p>
                 
                 {/* Local Leaderboard */}
                 {localLeaderboard.length > 0 && (
                   <div style={{
                     background: 'rgba(255, 255, 255, 0.1)',
                     borderRadius: '15px',
-                    padding: '1rem',
+                    padding: isMobile ? '0.75rem' : '1rem',
                     marginBottom: '2rem'
                   }}>
-                    <h3 style={{ margin: '0 0 1rem 0' }}>🏠 Your High Scores</h3>
+                    <h3 style={{ margin: '0 0 1rem 0', fontSize: isMobile ? '1rem' : '1.2rem' }}>🏠 Your High Scores</h3>
                     
                     <div style={{
                       display: 'grid',
-                      gridTemplateColumns: '50px 1fr 80px',
+                      gridTemplateColumns: isMobile ? '40px 1fr 60px' : '50px 1fr 80px',
                       gap: '0.5rem',
                       marginBottom: '0.5rem',
-                      fontSize: '0.9rem',
+                      fontSize: isMobile ? '0.8rem' : '0.9rem',
                       opacity: 0.8
                     }}>
                       <span>Rank</span>
@@ -1167,35 +1578,41 @@ const App = () => {
                         key={index} 
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: '50px 1fr 80px',
+                          gridTemplateColumns: isMobile ? '40px 1fr 60px' : '50px 1fr 80px',
                           gap: '0.5rem',
                           padding: '0.5rem',
                           borderRadius: '8px',
                           background: entry.score === gameState.score ? 'rgba(76, 175, 80, 0.3)' : 'rgba(255, 255, 255, 0.05)',
                           marginBottom: '0.25rem',
-                          fontSize: '0.9rem'
+                          fontSize: isMobile ? '0.8rem' : '0.9rem'
                         }}
                       >
                         <span>#{index + 1}</span>
                         <span style={{ fontWeight: 'bold' }}>{entry.score}</span>
-                        <span style={{ fontSize: '0.8rem' }}>{entry.date}</span>
+                        <span style={{ fontSize: isMobile ? '0.7rem' : '0.8rem' }}>{entry.date}</span>
                       </div>
                     ))}
                   </div>
                 )}
                 
-                <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                <div style={{ 
+                  display: 'flex', 
+                  gap: isMobile ? '0.5rem' : '1rem', 
+                  justifyContent: 'center', 
+                  flexWrap: 'wrap' 
+                }}>
                   <button 
                     onClick={resetGame} 
                     style={{
                       background: '#4caf50',
                       color: 'white',
                       border: 'none',
-                      padding: '0.75rem 1.5rem',
+                      padding: isMobile ? '0.75rem 1rem' : '0.75rem 1.5rem',
                       borderRadius: '25px',
                       cursor: 'pointer',
-                      fontSize: '1rem',
-                      fontWeight: 'bold'
+                      fontSize: isMobile ? '0.9rem' : '1rem',
+                      fontWeight: 'bold',
+                      touchAction: 'manipulation'
                     }}
                   >
                     Play Again
@@ -1206,13 +1623,14 @@ const App = () => {
                       background: '#666',
                       color: 'white',
                       border: 'none',
-                      padding: '0.75rem 1.5rem',
+                      padding: isMobile ? '0.75rem 1rem' : '0.75rem 1.5rem',
                       borderRadius: '25px',
                       cursor: 'pointer',
-                      fontSize: '1rem'
+                      fontSize: isMobile ? '0.9rem' : '1rem',
+                      touchAction: 'manipulation'
                     }}
                   >
-                    View Global Leaderboard
+                    Leaderboard
                   </button>
                 </div>
               </div>
@@ -1222,56 +1640,60 @@ const App = () => {
       </main>
 
       {/* Instructions */}
-      <div style={{
-        background: 'rgba(255, 255, 255, 0.95)',
-        padding: '2rem',
-        margin: '2rem auto',
-        maxWidth: '800px',
-        borderRadius: '20px',
-        textAlign: 'center',
-        boxShadow: '0 4px 15px rgba(0,0,0,0.1)'
-      }}>
-        <h3 style={{ margin: '0 0 1rem 0', color: '#333' }}>How to Play</h3>
-        <p style={{ margin: '0 0 1rem 0', color: '#666' }}>
-          Move left and right with arrow keys or A/D. Your character will automatically bounce on lily pads. Try to reach new heights!
-        </p>
-        {isUsernameSet && (
-          <p style={{ margin: 0, color: '#4caf50', fontWeight: 'bold' }}>
-            👤 Playing as {username} with {selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek'}: Your scores will be submitted to the global leaderboard!
+      {!isMobile && (
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.95)',
+          padding: '2rem',
+          margin: '2rem auto',
+          maxWidth: '800px',
+          borderRadius: '20px',
+          textAlign: 'center',
+          boxShadow: '0 4px 15px rgba(0,0,0,0.1)'
+        }}>
+          <h3 style={{ margin: '0 0 1rem 0', color: '#333', fontSize: '1.3rem' }}>How to Play</h3>
+          <p style={{ margin: '0 0 1rem 0', color: '#666', fontSize: '1rem' }}>
+            Move left and right with arrow keys or A/D. Your character will automatically bounce on lily pads. Try to reach new heights!
           </p>
-        )}
-      </div>
+          {isUsernameSet && (
+            <p style={{ margin: 0, color: '#4caf50', fontWeight: 'bold', fontSize: '1rem' }}>
+              👤 Playing as {username} with {selectedCharacter === 'cooper' ? 'Cooper' : 'Zeek'}: Your scores will be submitted to the global leaderboard!
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Footer */}
-      <footer style={{
-        background: 'rgba(0, 0, 0, 0.8)',
-        color: 'white',
-        padding: '2rem 0',
-        textAlign: 'center'
-      }}>
-        <div style={{
-          maxWidth: '1200px',
-          margin: '0 auto',
-          padding: '0 2rem'
+      {!isMobile && (
+        <footer style={{
+          background: 'rgba(0, 0, 0, 0.8)',
+          color: 'white',
+          padding: '2rem 0',
+          textAlign: 'center'
         }}>
-          <p style={{ margin: '0 0 1rem 0' }}>© 2025 PUMP House Game</p>
-          <div>
-            <a 
-              href="https://x.com/i/communities/1938265091519943153" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              style={{
-                color: '#4caf50',
-                textDecoration: 'none',
-                fontSize: '1.1rem',
-                fontWeight: 'bold'
-              }}
-            >
-              🐦 Follow on Twitter
-            </a>
+          <div style={{
+            maxWidth: '1200px',
+            margin: '0 auto',
+            padding: '0 2rem'
+          }}>
+            <p style={{ margin: '0 0 1rem 0', fontSize: '1rem' }}>© 2025 PUMP House Game</p>
+            <div>
+              <a 
+                href="https://x.com/i/communities/1938265091519943153" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                style={{
+                  color: '#4caf50',
+                  textDecoration: 'none',
+                  fontSize: '1.1rem',
+                  fontWeight: 'bold'
+                }}
+              >
+                🐦 Follow on Twitter
+              </a>
+            </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 };
